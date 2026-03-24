@@ -1,0 +1,508 @@
+\documentclass[11pt]{article}
+
+\usepackage[english]{babel}
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{hyperref}
+\usepackage{xcolor}
+\usepackage{enumitem}
+\usepackage{listings}
+\usepackage{tcolorbox}
+\usepackage{multicol}
+\usepackage{array}
+
+\hypersetup{
+    colorlinks=true,
+    linkcolor=blue,
+    urlcolor=blue,
+    citecolor=blue
+}
+
+\newtcolorbox{challengebox}{
+    colback=gray!5,
+    colframe=black!70,
+    boxrule=0.8pt,
+    arc=2mm
+}
+
+\newtcolorbox{warningbox}{
+    colback=red!3,
+    colframe=red!60!black,
+    boxrule=0.8pt,
+    arc=2mm
+}
+
+\newtcolorbox{hintbox}{
+    colback=blue!3,
+    colframe=blue!50!black,
+    boxrule=0.8pt,
+    arc=2mm
+}
+
+\title{\textbf{Numerical Recipes for Machine Learning}\\Challenge 1: K-Means Clustering for Images}
+\author{}
+\date{}
+
+\begin{document}
+\maketitle
+
+\section*{Challenge Overview}
+
+In this challenge you will implement, analyze, and stress-test several clustering methods based on \textbf{K-means}, using a subset of the \textbf{MNIST} handwritten digit dataset.
+
+Remember that the spirit of the course is \textbf{numerical recipes}: the objective of the course is for you to explicitly code the main components yourself, understand their computational cost, and reason about how numerical and modeling choices affect the final results.
+
+You will work with approximately \textbf{60000 images}. Since clustering scales poorly when implemented carelessly, your code should be written in a reasonably efficient way.
+
+\begin{warningbox}
+\textbf{Important practical advice.}
+Do not be dumb.
+
+Before running anything on 6000 images:
+\begin{itemize}[itemsep=2pt]
+    \item test your code on a tiny subset first;
+    \item test with only a few labels first;
+    \item verify shapes, distances, assignments, and objective values;
+    \item make sure your code converges on small examples before scaling up.
+\end{itemize}
+If your code is slow or wrong on 100 images, it will not magically become good on 6000.
+\end{warningbox}
+
+
+\section*{Learning Goals}
+
+By the end of this challenge, you should be able to:
+\begin{itemize}[itemsep=3pt]
+
+    \item \textbf{Understand the basic K-means algorithm beyond the formula.}  
+    You should be able to implement it from scratch, track its objective function, reason about its convergence behavior, and recognize its dependence on initialization and numerical choices.
+
+    \item \textbf{Understand the role of feature representation and selection.}  
+    You should see how the same data, represented differently (pixel domain vs.\ frequency domain), leads to very different clustering outcomes, and how emphasizing or suppressing features changes the geometry of the problem.
+
+    \item \textbf{Understand how to evaluate the quality of clustering.}  
+    Since clustering is unsupervised, you must learn how to assess whether the solution is meaningful using internal metrics (objective, silhouette, stability) and external signals (labels, purity), and understand their limitations.
+
+    \item \textbf{Explore how hierarchical structure can simplify complex problems.}  
+    You should see how breaking a clustering task into multiple stages can make the problem more tractable, and how hierarchical K-means provides both computational and interpretability benefits.
+
+    \item \textbf{Understand that distance is a modeling choice, not a given.}  
+    You should realize that Euclidean distance is only one possibility, and that once we move to alternative notions of similarity (e.g., edit distance), even defining a “centroid” becomes non-trivial and requires rethinking the algorithm.
+
+\end{itemize}
+
+\section*{Background}
+
+K-means seeks a partition of the data into \(K\) disjoint clusters by minimizing the within-cluster variation. In the standard formulation, this corresponds to solving
+\[
+\min_{\{C_k\}_{k=1}^K} \sum_{k=1}^K \sum_{i \in C_k} \|x_i - \mu_k\|_2^2,
+\]
+where \(\mu_k\) is the centroid of cluster \(C_k\).
+
+The algorithm proceeds by iterating the following two steps:
+
+\paragraph{Assignment step}
+\[
+\ell_i^{(t)} = \arg\min_{k \in \{1,\dots,K\}} \|x_i - \mu_k^{(t)}\|_2^2
+\]
+
+\paragraph{Update step}
+\[
+\mu_k^{(t+1)} = \frac{1}{|\{i : \ell_i^{(t)} = k\}|} \sum_{i : \ell_i^{(t)} = k} x_i
+\]
+
+That’s it. Two lines.
+
+In class, we focused on this clean formulation and its geometric intuition. However, many important aspects were intentionally left out, and this challenge is designed to make you confront them directly.
+
+\vspace{0.3cm}
+
+This simple idea hides a number of important practical and numerical issues:
+
+\begin{itemize}[itemsep=3pt]
+
+    \item \textbf{Initialization matters.}  
+    Different initial centroids can lead to completely different local minima.
+
+    \item \textbf{The number of clusters \(K\) is not given.}  
+    Choosing \(K\) is not part of the algorithm, yet it strongly determines the outcome.
+
+    \item \textbf{Distance computation is the real bottleneck.}  
+    Even with Euclidean distance, computing all pairwise distances between \(N\) points and \(K\) centroids scales as \(O(NK)\) per iteration.  
+    As \(K\) grows, even finding the closest centroid becomes non-trivial and may dominate the runtime.
+
+    \item \textbf{Beyond \(\ell_2\), things get complicated quickly.}  
+    If we replace Euclidean distance with another metric (e.g., weighted distances, edit distance, or other structured similarities), both the computational cost and the mathematical properties of the algorithm can change drastically.
+
+    \item \textbf{Feature scaling and representation matter.}  
+    The algorithm operates entirely through distances, so any change in representation directly changes the clustering result.
+
+    \item \textbf{Categorical or non-vector data is problematic.}  
+    The notion of a centroid as an average may not even be well-defined, requiring alternative formulations (e.g., medoids or prototype-based clustering).
+
+    \item \textbf{Clustering is not inherently robust.}  
+    The algorithm will always return clusters, but these may not be meaningful, stable, or generalizable without proper validation.
+
+\end{itemize}
+
+These aspects are emphasized in the reference material, but here you will explore them numerically and empirically through implementation.
+\section*{Dataset}
+
+Use the \textbf{MNIST} dataset of handwritten digits.
+Each image is grayscale and has size \(28 \times 28\), so each sample can be represented as:
+\[
+x \in \mathbb{R}^{784}.
+\]
+
+For the main experiments:
+\begin{itemize}[itemsep=2pt]
+    \item use roughly \(\mathbf{60000}\) images in total;
+    \item optionally start with a reduced label set, e.g. digits \(\{0,1,2,3\}\), before moving to all 10 digits;
+    \item keep the original digit labels only for \emph{evaluation}, not for training the clustering algorithm.
+\end{itemize}
+
+\section*{General Coding Requirements}
+
+You must explicitly implement the following core routines:
+\begin{enumerate}[label=\arabic*.]
+    \item \texttt{compute\_distance\_matrix(X, C)}
+    \item \texttt{assign\_clusters(X, C)}
+    \item \texttt{update\_centroids(X, labels, K)}
+    \item \texttt{kmeans(X, K, max\_iter, tol, n\_init)}
+    \item \texttt{compute\_objective(X, labels, C)}
+    \item \texttt{train\_test\_cluster\_evaluation(...)}
+\end{enumerate}
+
+You may use \texttt{numpy} for vectorized computation, but do \textbf{not} delegate the core algorithm to a library call.
+
+\begin{hintbox}
+\textbf{Efficiency hint.}
+A double \texttt{for} loop over all images and centroids is acceptable for debugging but not for your final implementation.
+You should aim for vectorized distance computation wherever possible.
+\end{hintbox}
+
+% \section*{What to Submit}
+
+% Submit:
+% \begin{itemize}[itemsep=2pt]
+%     \item your code;
+%     \item a short report with figures and discussion;
+%     \item plots of clustering quality metrics;
+%     \item examples of centroids/prototypes and representative images from clusters;
+%     \item a short discussion of runtime and implementation choices.
+% \end{itemize}
+
+\section*{Tasks}
+
+\subsection*{Task 1 --- Basic K-means on MNIST}
+
+Implement standard K-means on vectorized MNIST images using squared Euclidean distance.
+
+\paragraph{Minimum requirements.}
+\begin{itemize}[itemsep=2pt]
+    \item Flatten each \(28 \times 28\) image into a vector in \(\mathbb{R}^{784}\).
+    \item Normalize pixel values to the $[0,1]$ range.
+    \item Run K-means for different values of \(K\).
+    \item Use multiple random initializations.
+    \item Track the objective value as a function of iteration.
+\end{itemize}
+
+\paragraph{Experiments.}
+\begin{itemize}[itemsep=2pt]
+    \item Try \(K \in \{5, 10, 15, 20, 30\}\).
+    \item Compare random initialization with a smarter initialization of your choice.
+    \item Visualize the final centroids as \(28 \times 28\) images.
+    \item For each cluster, show a few nearest images to the centroid.
+\end{itemize}
+
+\paragraph{Questions to discuss.}
+\begin{itemize}[itemsep=2pt]
+    \item Do the learned clusters align with digit identity?
+    \item Which digits are easy to cluster? Which ones mix together?
+    \item How sensitive are your results to initialization?
+\end{itemize}
+
+\subsubsection*{Task 1.a --- How should we choose \(K\)?}
+
+K-means requires \(K\) in advance. That is mathematically convenient and scientifically annoying.
+
+Investigate at least \textbf{two} methods for selecting \(K\), for example:
+\begin{itemize}[itemsep=2pt]
+    \item elbow curve using within-cluster objective;
+    \item silhouette score;
+    \item cluster purity using true labels only as an external evaluation;
+    \item stability across different runs.
+\end{itemize}
+
+\paragraph{Deliverable.}
+Produce a plot and short discussion answering:
+\begin{quote}
+What values of \(K\) seem numerically reasonable, and what values seem scientifically meaningful?
+\end{quote}
+
+\subsection*{Task 2 --- K-means in the DFT domain with feature weighting}
+
+Now represent each image in the \textbf{frequency domain}.
+
+For each image:
+\begin{enumerate}[itemsep=2pt]
+    \item compute the 2D DFT;
+    \item decide whether to keep magnitude only, phase only, or both;
+    \item build a feature vector from the transformed image;
+    \item perform K-means in that feature space.
+\end{enumerate}
+
+Then introduce \textbf{feature weighting}.
+
+Let \(z_i \in \mathbb{R}^d\) be the transformed feature vector. Instead of the standard distance, use
+\[
+d_w(z_i, \mu_k)^2 = \sum_{j=1}^d w_j (z_{ij} - \mu_{kj})^2,
+\]
+with \(w_j \ge 0\).
+
+\paragraph{Minimum requirements.}
+\begin{itemize}[itemsep=2pt]
+    \item compare image-domain clustering and DFT-domain clustering;
+    \item try at least one hand-designed weighting strategy;
+    \item explain what frequencies are being emphasized or suppressed.
+\end{itemize}
+
+\paragraph{Ideas for weighting.}
+\begin{itemize}[itemsep=2pt]
+    \item emphasize low frequencies;
+    \item emphasize high frequencies;
+    \item radial weights based on distance from the DC component;
+    \item band-pass style weights.
+\end{itemize}
+
+\paragraph{Questions to discuss.}
+\begin{itemize}[itemsep=2pt]
+    \item Which digits benefit from frequency-domain representation?
+    \item Does emphasizing low frequencies improve cluster smoothness?
+    \item Does emphasizing high frequencies help distinguish writing style?
+\end{itemize}
+
+\subsubsection*{Task 2.a --- How should the feature weights be optimized?}
+
+Now stop guessing the weights and try to \textbf{optimize} them.
+
+There are many reasonable approaches. You may choose one of the following:
+\begin{enumerate}[itemsep=2pt]
+    \item \textbf{Grid search or random search:} define a low-dimensional family of weights, then search for the best parameters.
+    \item \textbf{Alternating optimization:} alternate between updating assignments/centroids and updating weights.
+    \item \textbf{Metric-learning inspired idea:} optimize weights to improve an external validation score computed from labels.
+    \item \textbf{Train-set objective only:} optimize weights to minimize the K-means objective on the training data, then see whether this generalizes.
+\end{enumerate}
+
+\paragraph{Important warning.}
+If you optimize weights using label information, then you are no longer doing purely unsupervised learning. That is allowed here, but you must clearly say so.
+
+\paragraph{Deliverable.}
+Describe:
+\begin{itemize}[itemsep=2pt]
+    \item your parameterization of the weights;
+    \item your optimization method;
+    \item whether the learned weights improve clustering on held-out data.
+\end{itemize}
+
+\subsection*{Task 3 --- Validating clusters with train/test splits}
+
+Clustering is unsupervised, but that does \emph{not} mean validation is optional.
+
+Design a train/test pipeline:
+\begin{enumerate}[itemsep=2pt]
+    \item fit the centroids using only the training set;
+    \item assign test images to the learned centroids;
+    \item compare train and test clustering behavior.
+\end{enumerate}
+
+\paragraph{Suggested evaluation metrics.}
+Use at least three of the following:
+\begin{itemize}[itemsep=2pt]
+    \item training objective;
+    \item test objective after assigning test points to nearest train centroids;
+    \item purity with respect to digit labels;
+    \item normalized mutual information;
+    \item entropy of label distribution inside each cluster;
+    \item cluster size imbalance;
+    \item stability across multiple random splits.
+\end{itemize}
+
+\paragraph{Discussion prompt.}
+A clustering solution can look excellent on the data used to build it and still be useless on new samples. Show whether your clusters generalize.
+
+\subsubsection*{Task 3.a --- Test different train/test ratios}
+
+Repeat the validation pipeline for different splits, for example:
+\[
+50/50,\quad 70/30,\quad 80/20,\quad 90/10.
+\]
+
+\paragraph{Questions to discuss.}
+\begin{itemize}[itemsep=2pt]
+    \item How stable are the learned centroids?
+    \item At what point does using more training data stop helping much?
+    \item Which representation is more robust under data reduction: pixel domain or DFT domain?
+\end{itemize}
+
+\subsection*{Task 4 --- Hierarchical K-means}
+
+Implement a \textbf{hierarchical K-means} strategy.
+
+One natural version is:
+\begin{enumerate}[itemsep=2pt]
+    \item cluster all images into \(K_1\) groups;
+    \item within each group, run K-means again with \(K_2\);
+    \item continue for a small number of levels.
+\end{enumerate}
+
+This creates a tree-structured partition of the data.
+
+\paragraph{Minimum requirements.}
+\begin{itemize}[itemsep=2pt]
+    \item implement at least a 2-level hierarchy;
+    \item compare flat K-means and hierarchical K-means at similar total numbers of leaf clusters;
+    \item discuss computational tradeoffs and representation benefits.
+\end{itemize}
+
+\paragraph{Ideas to explore.}
+\begin{itemize}[itemsep=2pt]
+    \item use a coarse first split and finer second splits;
+    \item inspect whether high-level clusters correspond to broad visual shapes;
+    \item inspect whether lower-level clusters separate writing styles.
+\end{itemize}
+
+\paragraph{Connection to the notes.}
+Compare your hierarchical K-means tree-like structure with the general motivation of hierarchical clustering and the need to reason carefully about cluster granularity and validation :contentReference[oaicite:2]{index=2}.
+
+\subsection*{Task 5 --- K-means with a different distance between images: edit distance}
+
+This part is intentionally weird.
+
+Standard K-means is based on Euclidean geometry and centroids defined by averages. That becomes problematic when the notion of similarity is no longer Euclidean.
+
+Your task is to define an \textbf{alternative representation} of each image that allows a distance inspired by \textbf{edit distance}.
+
+\paragraph{Possible idea.}
+Convert each image into a symbolic sequence, for example by:
+\begin{itemize}[itemsep=2pt]
+    \item thresholding the image into binary pixels and reading row-by-row;
+    \item extracting contours and representing them as direction codes;
+    \item converting local image patches into symbols from a finite alphabet.
+\end{itemize}
+
+Then define a distance between two images using an edit-distance-like metric on those sequences.
+
+\paragraph{Main conceptual problem.}
+If your distance is not Euclidean, what is the centroid?
+
+You must address this. Possible solutions:
+\begin{itemize}[itemsep=2pt]
+    \item use a \textbf{medoid} instead of a mean centroid;
+    \item define a prototype as the sequence minimizing total distance to all others in the cluster;
+    \item compare this approach with K-medoids rather than true K-means.
+\end{itemize}
+
+\paragraph{Deliverable.}
+You do \textbf{not} need to produce a perfect solution. But you must:
+\begin{itemize}[itemsep=2pt]
+    \item propose a sensible representation;
+    \item define the distance clearly;
+    \item explain why the ordinary K-means update step breaks down;
+    \item present at least a small-scale experiment.
+\end{itemize}
+
+\begin{warningbox}
+\textbf{This task is deliberately meant to make your computer struggle!}
+Once you leave Euclidean space, many convenient formulas disappear.
+That is the point.
+\end{warningbox}
+
+% \section*{Required Functions}
+
+% At minimum, your code should include clearly documented implementations of the following.
+
+% \subsection*{Core K-means routines}
+% \begin{itemize}[itemsep=2pt]
+%     \item \texttt{initialize\_centroids(X, K, method)}
+%     \item \texttt{compute\_squared\_distances(X, C)}
+%     \item \texttt{assign\_clusters(X, C)}
+%     \item \texttt{update\_centroids(X, labels, K)}
+%     \item \texttt{compute\_objective(X, labels, C)}
+%     \item \texttt{kmeans(X, K, max\_iter, tol, n\_init)}
+% \end{itemize}
+
+% \subsection*{Frequency-domain routines}
+% \begin{itemize}[itemsep=2pt]
+%     \item \texttt{dft\_features(images)}
+%     \item \texttt{build\_weights(params)}
+%     \item \texttt{weighted\_distance(X, C, w)}
+%     \item \texttt{optimize\_weights(...)}
+% \end{itemize}
+
+% \subsection*{Validation routines}
+% \begin{itemize}[itemsep=2pt]
+%     \item \texttt{train\_test\_split\_clustering(...)}
+%     \item \texttt{cluster\_purity(...)}
+%     \item \texttt{cluster\_entropy(...)}
+%     \item \texttt{split\_stability(...)}
+% \end{itemize}
+
+% \subsection*{Hierarchical routines}
+% \begin{itemize}[itemsep=2pt]
+%     \item \texttt{hierarchical\_kmeans(X, K1, K2, ...)}
+% \end{itemize}
+
+% \subsection*{Alternative-distance routines}
+% \begin{itemize}[itemsep=2pt]
+%     \item \texttt{image\_to\_sequence(image)}
+%     \item \texttt{edit\_distance(seq1, seq2)}
+%     \item \texttt{kmedoids(...)} or equivalent prototype-based method
+% \end{itemize}
+
+% \section*{Recommended Figures}
+
+% Your report should include some of the following:
+% \begin{itemize}[itemsep=2pt]
+%     \item objective value versus iteration;
+%     \item objective value versus \(K\);
+%     \item silhouette score versus \(K\);
+%     \item examples of cluster centroids as images;
+%     \item train versus test objective for different train/test ratios;
+%     \item comparison of pixel-domain and DFT-domain cluster prototypes;
+%     \item a diagram of your hierarchical K-means tree;
+%     \item a small comparison table of Euclidean K-means versus edit-distance prototype clustering.
+% \end{itemize}
+
+
+\section{Data visualisation and reporting}
+
+To convey your findings clearly, you should create informative plots.  Line plots or
+semilog plots are useful when comparing relative error across many orders of magnitude.
+Use scatter plots or bar charts to compare representations.  For operations like
+summation and multiplication, plotting error as a function of the number of terms makes
+trends visible.  Label axes and legends clearly, and consider using log scales when
+appropriate.  In your write‑up, accompany plots with concise interpretations—what the
+plot shows and why it matters.
+
+\section{Deliverables}
+
+\begin{itemize}
+  \item A Jupyter or Colab notebook containing your code.  The notebook should define
+    functions for encoding/decoding, arithmetic operations, error metrics and
+    visualisation.  Include comments explaining your choices and note any numerical
+    subtleties.
+  \item A short report (\emph{about one page}) summarising your key findings.  Discuss
+    which designs performed better or worse, what failure modes you observed (overflow,
+    underflow, cancellation), and how alternative representations like LNS compare to
+    standard mini‑floats.  Reflect on any surprising discoveries and note limitations of
+    your study (e.g., small sample sizes or untested operations).
+  \item (Optional) Additional analysis if you attempted the Level~3 stretch tasks.
+    Include extra plots or code snippets to illustrate your custom representation or
+    advanced summation algorithms.
+\end{itemize}
+
+\end{document}
+
